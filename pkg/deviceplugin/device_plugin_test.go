@@ -41,6 +41,14 @@ func TestBuildResourcePools(t *testing.T) {
 			podNonMatches:  []string{dpusim.HostDataIf(0), dpusim.HostDataIf(1), dpusim.HostDataIf(2), dpusim.HostDataIf(3)},
 		},
 		{
+			name:           "eight mgmt VFs",
+			mgmtCount:      8,
+			mgmtMatches:    []string{dpusim.HostDataIf(1), dpusim.HostDataIf(4), dpusim.HostDataIf(8)},
+			mgmtNonMatches: []string{dpusim.HostDataIf(0), dpusim.HostDataIf(9)},
+			podMatches:     []string{dpusim.HostDataIf(9), dpusim.HostDataIf(127)},
+			podNonMatches:  []string{dpusim.HostDataIf(0), dpusim.HostDataIf(1), dpusim.HostDataIf(8)},
+		},
+		{
 			name:           "single mgmt VF",
 			mgmtCount:      1,
 			mgmtMatches:    []string{dpusim.HostDataIf(1)},
@@ -93,7 +101,7 @@ func TestGatewayInterfaceExcludedFromPools(t *testing.T) {
 	t.Parallel()
 
 	gateway := dpusim.HostGatewayInterface
-	for _, mgmtCount := range []int{1, 2, 3, config.DefaultMgmtPortVFsCount} {
+	for _, mgmtCount := range []int{1, 2, 3, 8, config.DefaultMgmtPortVFsCount} {
 		pools, err := BuildResourcePools(mgmtCount)
 		require.NoError(t, err)
 		for _, pool := range pools {
