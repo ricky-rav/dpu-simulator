@@ -11,7 +11,7 @@ networks:
     type: "HostToDpu"
     num_pairs: 128
     gateway_subnet: "172.30.0.0/24"
-    mgmt_port_vfs_count: 3
+    mgmt_port_vfs_count: 8
 
 # Kind cluster configuration: one Kind cluster per kubernetes.clusters entry.
 # Node "name" is applied as a label (dpu-sim.org/node-name); Kind does not support node renaming.
