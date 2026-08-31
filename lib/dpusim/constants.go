@@ -24,9 +24,17 @@ const (
 	HostGatewayInterfaceIndex = 0
 	MgmtPortInterfaceIndex    = 1
 
-	HostGatewayInterface     = "eth0-0" // fmt.Sprintf(HostDataIfFmt, HostGatewayInterfaceIndex)
-	HostGatewayPeerInterface = "rep0-0" // fmt.Sprintf(DPUDataIfFmt, HostGatewayInterfaceIndex)
-	MgmtPortNetDevName       = "eth0-1" // fmt.Sprintf(HostDataIfFmt, MgmtPortInterfaceIndex)
+	// UplinkInterfaceIndex is the conventional index of the uplink veth pair,
+	// created out-of-band by ovn-kubernetes' kind-dpu-sim-no-overlay.sh. Must
+	// stay outside num_pairs so the device plugin never advertises it as a
+	// pod VF, and <= 255 (the script encodes it in the last MAC byte).
+	UplinkInterfaceIndex = 200
+
+	HostGatewayInterface     = "eth0-0"   // fmt.Sprintf(HostDataIfFmt, HostGatewayInterfaceIndex)
+	HostGatewayPeerInterface = "rep0-0"   // fmt.Sprintf(DPUDataIfFmt, HostGatewayInterfaceIndex)
+	MgmtPortNetDevName       = "eth0-1"   // fmt.Sprintf(HostDataIfFmt, MgmtPortInterfaceIndex)
+	UplinkNetDevName         = "eth0-200" // fmt.Sprintf(HostDataIfFmt, UplinkInterfaceIndex)
+	UplinkPeerNetDevName     = "rep0-200" // fmt.Sprintf(DPUDataIfFmt, UplinkInterfaceIndex)
 )
 
 // ReSimulationNetdevFunc matches the trailing <pfId>-<funcId> suffix on
