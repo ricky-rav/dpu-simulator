@@ -243,6 +243,11 @@ jobs:
           # Keep docker save temp files off of /tmp to runner.temp
           TMPDIR: ${{ runner.temp }}
           DPU_SIM_KIND_IMAGE_TMPDIR: ${{ runner.temp }}
+          # Keep the uplink veth pair outside the simulator's created pairs
+          # (num_pairs: 128, indices 0..127) so the device plugin never
+          # advertises it as an allocatable pod VF. Explicit here so the lane
+          # works regardless of the default in kind-dpu-sim-no-overlay.sh.
+          DPU_SIM_UPLINK_INDEX: "200"
         run: ./contrib/kind-dpu-sim-no-overlay.sh
 
       - name: Verify clusters are ready
@@ -322,7 +327,8 @@ jobs:
           source "${DPU_SIM_ROOT}/kubeconfig/helm-values/dpu-sim-dpu-frr-k8s.env"
           export KUBECONFIG="${DPU_SIM_ROOT}/kubeconfig/dpu-sim-host.kubeconfig"
           export OVN_TEST_DPU_UPLINK_NETWORK="dpu-sim-uplink"
-          export OVN_TEST_DPU_UPLINK_HOST_INTERFACE="eth0-16"
+          # Keep in sync with DPU_SIM_UPLINK_INDEX in the deploy step above.
+          export OVN_TEST_DPU_UPLINK_HOST_INTERFACE="eth0-200"
           export OVN_TEST_DPU_UPLINK_EXPECTED_BRIDGE="breth-uplink"
           export OVN_TEST_BGP_SERVER_NET_SUBNET_IPV4="172.29.0.0/16"
           export OVN_TEST_BGP_SERVER_NET_SUBNET_IPV6="fc00:f853:ccd:e797::/64"
