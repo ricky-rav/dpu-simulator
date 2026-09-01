@@ -243,10 +243,6 @@ jobs:
           # Keep docker save temp files off of /tmp to runner.temp
           TMPDIR: ${{ runner.temp }}
           DPU_SIM_KIND_IMAGE_TMPDIR: ${{ runner.temp }}
-          # dpusim.UplinkInterfaceIndex: outside the created pairs (num_pairs)
-          # so the device plugin never advertises the uplink VF as a pod VF.
-          # Explicit so the lane works with any kind-dpu-sim-no-overlay.sh default.
-          DPU_SIM_UPLINK_INDEX: "200"
         run: ./contrib/kind-dpu-sim-no-overlay.sh
 
       - name: Verify clusters are ready
