@@ -256,6 +256,11 @@ func TestDPUHostManagementPortVFsCount(t *testing.T) {
 			expected: 1,
 		},
 		{
+			name:     "default leaves room for reserved uplink VFs",
+			network:  NetworkConfig{Name: "host-to-dpu", Type: HostToDpuNetworkType, NumPairs: 4, UplinkVFsCount: 1},
+			expected: 1,
+		},
+		{
 			name:     "falls back to zero when only the gateway interface exists",
 			network:  NetworkConfig{Name: "host-to-dpu", Type: HostToDpuNetworkType, NumPairs: 2},
 			expected: 0,
@@ -299,6 +304,85 @@ func TestValidateHostToDpuManagementPortVFsCount(t *testing.T) {
 			assert.Contains(t, err.Error(), "mgmt_port_vfs_count")
 		})
 	}
+}
+
+func TestDPUHostUplinkVFs(t *testing.T) {
+	tests := []struct {
+		name          string
+		network       NetworkConfig
+		expectedCount int
+		expectedIfs   []string
+	}{
+		{
+			name:          "no uplink VFs by default",
+			network:       NetworkConfig{Name: "host-to-dpu", Type: HostToDpuNetworkType, NumPairs: 16, MgmtPortVFsCount: 3},
+			expectedCount: 0,
+			expectedIfs:   nil,
+		},
+		{
+			name:          "one uplink VF right after the mgmt range",
+			network:       NetworkConfig{Name: "host-to-dpu", Type: HostToDpuNetworkType, NumPairs: 16, MgmtPortVFsCount: 3, UplinkVFsCount: 1},
+			expectedCount: 1,
+			expectedIfs:   []string{"eth0-4"},
+		},
+		{
+			name:          "two uplink VFs",
+			network:       NetworkConfig{Name: "host-to-dpu", Type: HostToDpuNetworkType, NumPairs: 128, MgmtPortVFsCount: 8, UplinkVFsCount: 2},
+			expectedCount: 2,
+			expectedIfs:   []string{"eth0-9", "eth0-10"},
+		},
+		{
+			name:          "mgmt and uplink VFs exactly fill the budget",
+			network:       NetworkConfig{Name: "host-to-dpu", Type: HostToDpuNetworkType, NumPairs: 6, MgmtPortVFsCount: 2, UplinkVFsCount: 2},
+			expectedCount: 2,
+			expectedIfs:   []string{"eth0-3", "eth0-4"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := Config{Networks: []NetworkConfig{tt.network}}
+			require.NoError(t, cfg.validateAndSetDefaults())
+			assert.Equal(t, tt.expectedCount, cfg.DPUHostUplinkVFsCount())
+			assert.Equal(t, tt.expectedIfs, cfg.DPUHostUplinkInterfaces())
+		})
+	}
+}
+
+func TestValidateHostToDpuUplinkVFsCount(t *testing.T) {
+	// num_pairs must fit the gateway, the mgmt and uplink VFs, and at least
+	// one pod VF; here 3 mgmt + 2 uplink exceed the 6 available pairs.
+	cfg := Config{Networks: []NetworkConfig{
+		{Name: "host-to-dpu", Type: HostToDpuNetworkType, NumPairs: 6, MgmtPortVFsCount: 3, UplinkVFsCount: 2},
+	}}
+	err := cfg.validateAndSetDefaults()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "uplink_vfs_count")
+
+	// Not allowed on non-HostToDpu networks.
+	cfg = Config{Networks: []NetworkConfig{
+		{Name: "br-net", Type: "Bridge", BridgeName: "br0", UplinkVFsCount: 1},
+	}}
+	err = cfg.validateAndSetDefaults()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "uplink_vfs_count")
+
+	// Negative counts are rejected.
+	cfg = Config{Networks: []NetworkConfig{
+		{Name: "host-to-dpu", Type: HostToDpuNetworkType, NumPairs: 16, MgmtPortVFsCount: 3, UplinkVFsCount: -1},
+	}}
+	err = cfg.validateAndSetDefaults()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "'uplink_vfs_count' must be >= 0")
+
+	// Any nonzero value on non-HostToDpu networks is rejected, negatives too.
+	cfg = Config{Networks: []NetworkConfig{
+		{Name: "br-net", Type: "Bridge", BridgeName: "br0", UplinkVFsCount: -1, MgmtPortVFsCount: -1},
+	}}
+	err = cfg.validateAndSetDefaults()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "'uplink_vfs_count' is not allowed")
+	assert.Contains(t, err.Error(), "'mgmt_port_vfs_count' is not allowed")
 }
 
 func TestValidateHostToDpuMgmtPortVFsCountRequiresOneWhenOffloadDPU(t *testing.T) {

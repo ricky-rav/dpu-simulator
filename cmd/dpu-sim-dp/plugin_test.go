@@ -28,7 +28,7 @@ type testEnv struct {
 
 func newTestPlugin(t *testing.T, env *testEnv) *DpuSimDevicePlugin {
 	t.Helper()
-	pools, err := deviceplugin.BuildResourcePools(1)
+	pools, err := deviceplugin.BuildResourcePools(1, 0, 0)
 	require.NoError(t, err)
 	require.Len(t, pools, 2)
 

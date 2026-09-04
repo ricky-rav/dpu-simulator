@@ -30,6 +30,18 @@ const (
 	// MgmtPortVFsCountEnvVar is injected into the device-plugin DaemonSet from
 	// the simulator config networks[].mgmt_port_vfs_count value.
 	MgmtPortVFsCountEnvVar = "MGMT_PORT_VFS_COUNT"
+
+	// UplinkVFsCountEnvVar is injected into the device-plugin DaemonSet from
+	// the simulator config networks[].uplink_vfs_count value. The uplink VFs
+	// sit right after the mgmt range and belong to no pool: they are reserved
+	// for node infrastructure (Uplink gateway bridges), never for pods.
+	UplinkVFsCountEnvVar = "UPLINK_VFS_COUNT"
+
+	// NumPairsEnvVar is injected into the device-plugin DaemonSet from the
+	// simulator config networks[].num_pairs value. It bounds the pod VF pool
+	// so interfaces created out of band (e.g. an uplink veth at an
+	// out-of-range index) are never advertised.
+	NumPairsEnvVar = "NUM_PAIRS"
 )
 
 // ResourcePool describes one class of simulated device resources.
@@ -76,15 +88,23 @@ func (p ResourcePool) MatcherDescription() string {
 }
 
 // BuildResourcePools returns mgmt and pod VF pools for the given management-port
-// VF count. Mgmt VFs are eth0-1 through eth0-N; pod VFs start at eth0-(N+1).
-// dpusim.HostGatewayInterface (eth0-0) is excluded from both pools.
-func BuildResourcePools(mgmtPortVFsCount int) ([]ResourcePool, error) {
+// and uplink VF counts. Mgmt VFs are eth0-1 through eth0-N; the next
+// uplinkVFsCount interfaces are reserved for Uplink gateways and belong to no
+// pool; pod VFs start after them. dpusim.HostGatewayInterface (eth0-0) is
+// excluded from both pools.
+func BuildResourcePools(mgmtPortVFsCount, uplinkVFsCount, numPairs int) ([]ResourcePool, error) {
 	if mgmtPortVFsCount < 1 {
 		return nil, fmt.Errorf("mgmt_port_vfs_count must be >= 1, got %d", mgmtPortVFsCount)
 	}
+	if uplinkVFsCount < 0 {
+		return nil, fmt.Errorf("uplink_vfs_count must be >= 0, got %d", uplinkVFsCount)
+	}
 	// Exclude the gateway interface (eth0-0) from the mgmt VF pool.
 	mgmtVFStart := dpusim.HostGatewayInterfaceIndex + 1
-	podVFStart := mgmtPortVFsCount + 1
+	podVFStart := mgmtPortVFsCount + uplinkVFsCount + 1
+	if numPairs > 0 && numPairs-1 < podVFStart {
+		return nil, fmt.Errorf("num_pairs %d leaves no pod VF after the gateway, %d mgmt and %d uplink VFs", numPairs, mgmtPortVFsCount, uplinkVFsCount)
+	}
 
 	return []ResourcePool{
 		{
@@ -99,10 +119,28 @@ func BuildResourcePools(mgmtPortVFsCount int) ([]ResourcePool, error) {
 			ResourceName:         VFResourceName,
 			SocketName:           "dpusim-vf.sock",
 			EnvVarName:           "PCIDEVICE_DPUSIM_IO_VF",
-			matchesIface:         hostDataIfAtLeast(podVFStart),
+			matchesIface:         podVFMatcher(podVFStart, numPairs),
 			hostDataIfIndexStart: podVFStart,
+			hostDataIfIndexEnd:   podVFEnd(numPairs),
 		},
 	}, nil
+}
+
+// podVFMatcher bounds the pod VF pool to the interfaces dpu-sim creates
+// (indices podVFStart..numPairs-1), so out-of-band netdevs are never
+// advertised. numPairs 0 (manifests predating NUM_PAIRS) means no bound.
+func podVFMatcher(podVFStart, numPairs int) func(string) bool {
+	if numPairs > 0 {
+		return hostDataIfInRange(podVFStart, numPairs-1)
+	}
+	return hostDataIfAtLeast(podVFStart)
+}
+
+func podVFEnd(numPairs int) int {
+	if numPairs > 0 {
+		return numPairs - 1
+	}
+	return 0
 }
 
 // hostDataIfIndex parses a host-to-DPU data interface name (eth0-<index>) and
@@ -153,6 +191,30 @@ func MgmtPortVFsCountFromEnv() (int, error) {
 	count, err := strconv.Atoi(raw)
 	if err != nil || count < 1 {
 		return 0, fmt.Errorf("%s must be a positive integer, got %q", MgmtPortVFsCountEnvVar, raw)
+	}
+	return count, nil
+}
+
+// UplinkVFsCountFromEnv reads UPLINK_VFS_COUNT from the environment. Unset
+// means zero, so manifests predating the uplink reservation keep working.
+func UplinkVFsCountFromEnv() (int, error) {
+	return optionalCountFromEnv(UplinkVFsCountEnvVar)
+}
+
+// NumPairsFromEnv reads NUM_PAIRS from the environment. Unset means zero
+// (no pod pool upper bound), so older manifests keep working.
+func NumPairsFromEnv() (int, error) {
+	return optionalCountFromEnv(NumPairsEnvVar)
+}
+
+func optionalCountFromEnv(envVar string) (int, error) {
+	raw := strings.TrimSpace(os.Getenv(envVar))
+	if raw == "" {
+		return 0, nil
+	}
+	count, err := strconv.Atoi(raw)
+	if err != nil || count < 0 {
+		return 0, fmt.Errorf("%s must be a non-negative integer, got %q", envVar, raw)
 	}
 	return count, nil
 }
@@ -208,7 +270,7 @@ func BuildDevicePluginImage(cmdExec platform.CommandExecutor, engine containeren
 // deployDevicePlugin deploys the simulated device plugin DaemonSet onto the
 // current cluster. The manifest template is read from deploy/device-plugin/
 // and the image placeholder is replaced with the actual image reference.
-func DeployDevicePlugin(k8sClient *k8s.K8sClient, imageRef string, mgmtPortVFsCount int) error {
+func DeployDevicePlugin(k8sClient *k8s.K8sClient, imageRef string, mgmtPortVFsCount, uplinkVFsCount, numPairs int) error {
 	projectRoot, err := platform.GetProjectRoot()
 	if err != nil {
 		return fmt.Errorf("failed to get project root: %w", err)
@@ -223,12 +285,17 @@ func DeployDevicePlugin(k8sClient *k8s.K8sClient, imageRef string, mgmtPortVFsCo
 	if mgmtPortVFsCount < 1 {
 		return fmt.Errorf("mgmt_port_vfs_count must be >= 1, got %d", mgmtPortVFsCount)
 	}
+	if uplinkVFsCount < 0 {
+		return fmt.Errorf("uplink_vfs_count must be >= 0, got %d", uplinkVFsCount)
+	}
 
 	manifest := string(manifestBytes)
 	manifest = strings.ReplaceAll(manifest, "DPU_SIM_DP_IMAGE", imageRef)
 	manifest = strings.ReplaceAll(manifest, "DPU_SIM_MGMT_PORT_VFS_COUNT", strconv.Itoa(mgmtPortVFsCount))
+	manifest = strings.ReplaceAll(manifest, "DPU_SIM_UPLINK_VFS_COUNT", strconv.Itoa(uplinkVFsCount))
+	manifest = strings.ReplaceAll(manifest, "DPU_SIM_NUM_PAIRS", strconv.Itoa(numPairs))
 
-	log.Info("Deploying Device Plugin DaemonSet (image=%s, mgmt_port_vfs_count=%d)...", imageRef, mgmtPortVFsCount)
+	log.Info("Deploying Device Plugin DaemonSet (image=%s, mgmt_port_vfs_count=%d, uplink_vfs_count=%d)...", imageRef, mgmtPortVFsCount, uplinkVFsCount)
 	if err := k8sClient.ApplyManifest([]byte(manifest)); err != nil {
 		return fmt.Errorf("failed to apply Device Plugin DaemonSet: %w", err)
 	}
