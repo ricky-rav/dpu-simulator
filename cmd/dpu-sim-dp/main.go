@@ -30,12 +30,17 @@ func main() {
 		klog.Errorf("%v", err)
 		os.Exit(1)
 	}
-	pools, err := deviceplugin.BuildResourcePools(mgmtPortVFsCount)
+	uplinkVFsCount, err := deviceplugin.UplinkVFsCountFromEnv()
+	if err != nil {
+		klog.Errorf("%v", err)
+		os.Exit(1)
+	}
+	pools, err := deviceplugin.BuildResourcePools(mgmtPortVFsCount, uplinkVFsCount)
 	if err != nil {
 		klog.Errorf("Failed to build resource pools: %v", err)
 		os.Exit(1)
 	}
-	klog.Infof("Configured mgmt_port_vfs_count=%d", mgmtPortVFsCount)
+	klog.Infof("Configured mgmt_port_vfs_count=%d uplink_vfs_count=%d", mgmtPortVFsCount, uplinkVFsCount)
 
 	for _, pool := range pools {
 		klog.Infof("Configured pool: resource=%s socket=%s selector=%s", pool.ResourceName, pool.SocketName, pool.MatcherDescription())

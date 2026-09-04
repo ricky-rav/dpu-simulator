@@ -141,6 +141,10 @@ type NetworkConfig struct {
 	// ovnkube-node for default and primary UDN management ports. It only
 	// applies to HostToDpu networks.
 	MgmtPortVFsCount int `yaml:"mgmt_port_vfs_count,omitempty"`
+	// UplinkVFsCount is the number of simulated VFs reserved for Uplink
+	// gateway interfaces, right after the mgmt-port range. Reserved VFs
+	// belong to no device-plugin pool. It only applies to HostToDpu networks.
+	UplinkVFsCount int `yaml:"uplink_vfs_count,omitempty"`
 }
 
 // BareMetalConfig represents a bare metal configuration

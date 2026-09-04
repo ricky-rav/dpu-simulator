@@ -30,6 +30,12 @@ const (
 	// MgmtPortVFsCountEnvVar is injected into the device-plugin DaemonSet from
 	// the simulator config networks[].mgmt_port_vfs_count value.
 	MgmtPortVFsCountEnvVar = "MGMT_PORT_VFS_COUNT"
+
+	// UplinkVFsCountEnvVar is injected into the device-plugin DaemonSet from
+	// the simulator config networks[].uplink_vfs_count value. The uplink VFs
+	// sit right after the mgmt range and belong to no pool: they are reserved
+	// for node infrastructure (Uplink gateway bridges), never for pods.
+	UplinkVFsCountEnvVar = "UPLINK_VFS_COUNT"
 )
 
 // ResourcePool describes one class of simulated device resources.
@@ -76,15 +82,20 @@ func (p ResourcePool) MatcherDescription() string {
 }
 
 // BuildResourcePools returns mgmt and pod VF pools for the given management-port
-// VF count. Mgmt VFs are eth0-1 through eth0-N; pod VFs start at eth0-(N+1).
-// dpusim.HostGatewayInterface (eth0-0) is excluded from both pools.
-func BuildResourcePools(mgmtPortVFsCount int) ([]ResourcePool, error) {
+// and uplink VF counts. Mgmt VFs are eth0-1 through eth0-N; the next
+// uplinkVFsCount interfaces are reserved for Uplink gateways and belong to no
+// pool; pod VFs start after them. dpusim.HostGatewayInterface (eth0-0) is
+// excluded from both pools.
+func BuildResourcePools(mgmtPortVFsCount, uplinkVFsCount int) ([]ResourcePool, error) {
 	if mgmtPortVFsCount < 1 {
 		return nil, fmt.Errorf("mgmt_port_vfs_count must be >= 1, got %d", mgmtPortVFsCount)
 	}
+	if uplinkVFsCount < 0 {
+		return nil, fmt.Errorf("uplink_vfs_count must be >= 0, got %d", uplinkVFsCount)
+	}
 	// Exclude the gateway interface (eth0-0) from the mgmt VF pool.
 	mgmtVFStart := dpusim.HostGatewayInterfaceIndex + 1
-	podVFStart := mgmtPortVFsCount + 1
+	podVFStart := mgmtPortVFsCount + uplinkVFsCount + 1
 
 	return []ResourcePool{
 		{
@@ -157,6 +168,20 @@ func MgmtPortVFsCountFromEnv() (int, error) {
 	return count, nil
 }
 
+// UplinkVFsCountFromEnv reads UPLINK_VFS_COUNT from the environment. Unset
+// means zero, so manifests predating the uplink reservation keep working.
+func UplinkVFsCountFromEnv() (int, error) {
+	raw := strings.TrimSpace(os.Getenv(UplinkVFsCountEnvVar))
+	if raw == "" {
+		return 0, nil
+	}
+	count, err := strconv.Atoi(raw)
+	if err != nil || count < 0 {
+		return 0, fmt.Errorf("%s must be a non-negative integer, got %q", UplinkVFsCountEnvVar, raw)
+	}
+	return count, nil
+}
+
 // BuildAndLoadImage builds the device plugin image and pushes it to the
 // provided image loader (e.g. a local registry). Returns the image reference
 // that Kubernetes manifests should use.
@@ -208,7 +233,7 @@ func BuildDevicePluginImage(cmdExec platform.CommandExecutor, engine containeren
 // deployDevicePlugin deploys the simulated device plugin DaemonSet onto the
 // current cluster. The manifest template is read from deploy/device-plugin/
 // and the image placeholder is replaced with the actual image reference.
-func DeployDevicePlugin(k8sClient *k8s.K8sClient, imageRef string, mgmtPortVFsCount int) error {
+func DeployDevicePlugin(k8sClient *k8s.K8sClient, imageRef string, mgmtPortVFsCount, uplinkVFsCount int) error {
 	projectRoot, err := platform.GetProjectRoot()
 	if err != nil {
 		return fmt.Errorf("failed to get project root: %w", err)
@@ -223,12 +248,16 @@ func DeployDevicePlugin(k8sClient *k8s.K8sClient, imageRef string, mgmtPortVFsCo
 	if mgmtPortVFsCount < 1 {
 		return fmt.Errorf("mgmt_port_vfs_count must be >= 1, got %d", mgmtPortVFsCount)
 	}
+	if uplinkVFsCount < 0 {
+		return fmt.Errorf("uplink_vfs_count must be >= 0, got %d", uplinkVFsCount)
+	}
 
 	manifest := string(manifestBytes)
 	manifest = strings.ReplaceAll(manifest, "DPU_SIM_DP_IMAGE", imageRef)
 	manifest = strings.ReplaceAll(manifest, "DPU_SIM_MGMT_PORT_VFS_COUNT", strconv.Itoa(mgmtPortVFsCount))
+	manifest = strings.ReplaceAll(manifest, "DPU_SIM_UPLINK_VFS_COUNT", strconv.Itoa(uplinkVFsCount))
 
-	log.Info("Deploying Device Plugin DaemonSet (image=%s, mgmt_port_vfs_count=%d)...", imageRef, mgmtPortVFsCount)
+	log.Info("Deploying Device Plugin DaemonSet (image=%s, mgmt_port_vfs_count=%d, uplink_vfs_count=%d)...", imageRef, mgmtPortVFsCount, uplinkVFsCount)
 	if err := k8sClient.ApplyManifest([]byte(manifest)); err != nil {
 		return fmt.Errorf("failed to apply Device Plugin DaemonSet: %w", err)
 	}

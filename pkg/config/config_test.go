@@ -301,6 +301,61 @@ func TestValidateHostToDpuManagementPortVFsCount(t *testing.T) {
 	}
 }
 
+func TestDPUHostUplinkVFs(t *testing.T) {
+	tests := []struct {
+		name          string
+		network       NetworkConfig
+		expectedCount int
+		expectedIfs   []string
+	}{
+		{
+			name:          "no uplink VFs by default",
+			network:       NetworkConfig{Name: "host-to-dpu", Type: HostToDpuNetworkType, NumPairs: 16, MgmtPortVFsCount: 3},
+			expectedCount: 0,
+			expectedIfs:   nil,
+		},
+		{
+			name:          "one uplink VF right after the mgmt range",
+			network:       NetworkConfig{Name: "host-to-dpu", Type: HostToDpuNetworkType, NumPairs: 16, MgmtPortVFsCount: 3, UplinkVFsCount: 1},
+			expectedCount: 1,
+			expectedIfs:   []string{"eth0-4"},
+		},
+		{
+			name:          "two uplink VFs",
+			network:       NetworkConfig{Name: "host-to-dpu", Type: HostToDpuNetworkType, NumPairs: 128, MgmtPortVFsCount: 8, UplinkVFsCount: 2},
+			expectedCount: 2,
+			expectedIfs:   []string{"eth0-9", "eth0-10"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := Config{Networks: []NetworkConfig{tt.network}}
+			require.NoError(t, cfg.validateAndSetDefaults())
+			assert.Equal(t, tt.expectedCount, cfg.DPUHostUplinkVFsCount())
+			assert.Equal(t, tt.expectedIfs, cfg.DPUHostUplinkInterfaces())
+		})
+	}
+}
+
+func TestValidateHostToDpuUplinkVFsCount(t *testing.T) {
+	// mgmt + uplink VFs must leave the gateway and at least one pod VF.
+	cfg := Config{Networks: []NetworkConfig{
+		{Name: "host-to-dpu", Type: HostToDpuNetworkType, NumPairs: 6, MgmtPortVFsCount: 3, UplinkVFsCount: 2},
+	}}
+	err := cfg.validateAndSetDefaults()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "uplink_vfs_count")
+
+	// Not allowed on non-HostToDpu networks.
+	cfg = Config{Networks: []NetworkConfig{
+		{Name: "br-net", Type: "Bridge", BridgeName: "br0", UplinkVFsCount: 1},
+	}}
+	err = cfg.validateAndSetDefaults()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "uplink_vfs_count")
+}
+
 func TestValidateHostToDpuMgmtPortVFsCountRequiresOneWhenOffloadDPU(t *testing.T) {
 	cfg := Config{
 		Networks: []NetworkConfig{

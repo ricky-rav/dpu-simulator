@@ -19,6 +19,7 @@ func TestBuildResourcePools(t *testing.T) {
 	tests := []struct {
 		name           string
 		mgmtCount      int
+		uplinkCount    int
 		mgmtMatches    []string
 		mgmtNonMatches []string
 		podMatches     []string
@@ -49,6 +50,24 @@ func TestBuildResourcePools(t *testing.T) {
 			podNonMatches:  []string{dpusim.HostDataIf(0), dpusim.HostDataIf(1), dpusim.HostDataIf(8)},
 		},
 		{
+			name:           "eight mgmt VFs and one reserved uplink VF",
+			mgmtCount:      8,
+			uplinkCount:    1,
+			mgmtMatches:    []string{dpusim.HostDataIf(1), dpusim.HostDataIf(8)},
+			mgmtNonMatches: []string{dpusim.HostDataIf(0), dpusim.HostDataIf(9)},
+			podMatches:     []string{dpusim.HostDataIf(10), dpusim.HostDataIf(127)},
+			podNonMatches:  []string{dpusim.HostDataIf(0), dpusim.HostDataIf(8), dpusim.HostDataIf(9)},
+		},
+		{
+			name:           "two mgmt VFs and two reserved uplink VFs",
+			mgmtCount:      2,
+			uplinkCount:    2,
+			mgmtMatches:    []string{dpusim.HostDataIf(1), dpusim.HostDataIf(2)},
+			mgmtNonMatches: []string{dpusim.HostDataIf(0), dpusim.HostDataIf(3), dpusim.HostDataIf(4)},
+			podMatches:     []string{dpusim.HostDataIf(5), dpusim.HostDataIf(64)},
+			podNonMatches:  []string{dpusim.HostDataIf(2), dpusim.HostDataIf(3), dpusim.HostDataIf(4)},
+		},
+		{
 			name:           "single mgmt VF",
 			mgmtCount:      1,
 			mgmtMatches:    []string{dpusim.HostDataIf(1)},
@@ -61,7 +80,7 @@ func TestBuildResourcePools(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			pools, err := BuildResourcePools(tt.mgmtCount)
+			pools, err := BuildResourcePools(tt.mgmtCount, tt.uplinkCount)
 			require.NoError(t, err)
 			assert.Len(t, pools, 2)
 
@@ -75,7 +94,7 @@ func TestBuildResourcePools(t *testing.T) {
 			} else {
 				assert.Equal(t, fmt.Sprintf("%s..%s", dpusim.HostDataIf(1), dpusim.HostDataIf(tt.mgmtCount)), mgmtPool.MatcherDescription())
 			}
-			assert.Equal(t, fmt.Sprintf("%s..", dpusim.HostDataIf(tt.mgmtCount+1)), podPool.MatcherDescription())
+			assert.Equal(t, fmt.Sprintf("%s..", dpusim.HostDataIf(tt.mgmtCount+tt.uplinkCount+1)), podPool.MatcherDescription())
 
 			for _, iface := range tt.mgmtMatches {
 				assert.True(t, mgmtPool.MatchesIface(iface), "mgmt should match %s", iface)
@@ -102,7 +121,7 @@ func TestGatewayInterfaceExcludedFromPools(t *testing.T) {
 
 	gateway := dpusim.HostGatewayInterface
 	for _, mgmtCount := range []int{1, 2, 3, 8, config.DefaultMgmtPortVFsCount} {
-		pools, err := BuildResourcePools(mgmtCount)
+		pools, err := BuildResourcePools(mgmtCount, 1)
 		require.NoError(t, err)
 		for _, pool := range pools {
 			assert.False(t, pool.MatchesIface(gateway), "pool %s must not match %s", pool.ResourceName, gateway)
@@ -113,9 +132,36 @@ func TestGatewayInterfaceExcludedFromPools(t *testing.T) {
 func TestBuildResourcePoolsInvalidCountErrors(t *testing.T) {
 	t.Parallel()
 
-	_, err := BuildResourcePools(0)
+	_, err := BuildResourcePools(0, 0)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "mgmt_port_vfs_count")
+
+	_, err = BuildResourcePools(1, -1)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "uplink_vfs_count")
+}
+
+// TestUplinkVFsCountFromEnv checks parsing of UPLINK_VFS_COUNT: unset means
+// zero (manifests predating the reservation), negatives and garbage error.
+func TestUplinkVFsCountFromEnv(t *testing.T) {
+	t.Setenv(UplinkVFsCountEnvVar, "")
+	count, err := UplinkVFsCountFromEnv()
+	require.NoError(t, err)
+	assert.Equal(t, 0, count)
+
+	t.Setenv(UplinkVFsCountEnvVar, "2")
+	count, err = UplinkVFsCountFromEnv()
+	require.NoError(t, err)
+	assert.Equal(t, 2, count)
+
+	t.Setenv(UplinkVFsCountEnvVar, "-1")
+	_, err = UplinkVFsCountFromEnv()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), UplinkVFsCountEnvVar)
+
+	t.Setenv(UplinkVFsCountEnvVar, "invalid")
+	_, err = UplinkVFsCountFromEnv()
+	require.Error(t, err)
 }
 
 // TestMgmtPortVFsCountFromEnv checks parsing of MGMT_PORT_VFS_COUNT.
