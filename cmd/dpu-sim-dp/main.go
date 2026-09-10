@@ -4,7 +4,8 @@
 // can allocate management-port and pod VFs through the standard device
 // plugin mechanism.
 //
-// One gRPC server is started per resource pool built from MGMT_PORT_VFS_COUNT.
+// One gRPC server is started per resource pool built from MGMT_PORT_VFS_COUNT,
+// UPLINK_VFS_COUNT and NUM_PAIRS.
 package main
 
 import (
@@ -30,12 +31,22 @@ func main() {
 		klog.Errorf("%v", err)
 		os.Exit(1)
 	}
-	pools, err := deviceplugin.BuildResourcePools(mgmtPortVFsCount)
+	uplinkVFsCount, err := deviceplugin.UplinkVFsCountFromEnv()
+	if err != nil {
+		klog.Errorf("%v", err)
+		os.Exit(1)
+	}
+	numPairs, err := deviceplugin.NumPairsFromEnv()
+	if err != nil {
+		klog.Errorf("%v", err)
+		os.Exit(1)
+	}
+	pools, err := deviceplugin.BuildResourcePools(mgmtPortVFsCount, uplinkVFsCount, numPairs)
 	if err != nil {
 		klog.Errorf("Failed to build resource pools: %v", err)
 		os.Exit(1)
 	}
-	klog.Infof("Configured mgmt_port_vfs_count=%d", mgmtPortVFsCount)
+	klog.Infof("Configured mgmt_port_vfs_count=%d uplink_vfs_count=%d num_pairs=%d", mgmtPortVFsCount, uplinkVFsCount, numPairs)
 
 	for _, pool := range pools {
 		klog.Infof("Configured pool: resource=%s socket=%s selector=%s", pool.ResourceName, pool.SocketName, pool.MatcherDescription())

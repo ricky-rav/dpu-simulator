@@ -115,13 +115,17 @@ func (c *Config) validateAndSetDefaults() error {
 				errors = append(errors, fmt.Sprintf("networks[%d] (%s): 'mgmt_port_vfs_count' must be <= num_pairs-2 (%d) because %s is reserved for the gateway and at least one VF must remain for pods",
 					i, net.Name, availableMgmtPortVFs, dpusim.HostGatewayInterface))
 			}
+			if c.Networks[i].UplinkVFsCount < 0 {
+				errors = append(errors, fmt.Sprintf("networks[%d] (%s): 'uplink_vfs_count' must be >= 0", i, net.Name))
+				c.Networks[i].UplinkVFsCount = 0
+			}
 			// When mgmt_port_vfs_count is omitted or non-positive, apply the default
-			// from num_pairs and clamp so eth0-0 stays gateway-only and one VF remains
-			// for pods.
+			// from num_pairs and clamp so eth0-0 stays gateway-only and, after the
+			// reserved uplink VFs, one VF remains for pods.
 			if c.Networks[i].MgmtPortVFsCount <= 0 {
 				defaultVal := defaultDPUHostMgmtPortVFs(c.Networks[i].NumPairs)
-				if defaultVal > availableMgmtPortVFs {
-					defaultVal = availableMgmtPortVFs
+				if defaultVal > availableMgmtPortVFs-c.Networks[i].UplinkVFsCount {
+					defaultVal = availableMgmtPortVFs - c.Networks[i].UplinkVFsCount
 				}
 				if defaultVal < 0 {
 					defaultVal = 0
@@ -132,6 +136,16 @@ func (c *Config) validateAndSetDefaults() error {
 				errors = append(errors, fmt.Sprintf("networks[%d] (%s): 'mgmt_port_vfs_count' must be >= 1 when kubernetes.offload_dpu is enabled (%s is gateway-only; increase num_pairs to at least 3)",
 					i, net.Name, dpusim.HostGatewayInterface))
 			}
+			// Uplink VFs sit after the mgmt range; the gateway and at least one
+			// pod VF must still fit in num_pairs. Skipped when the mgmt count is
+			// already over budget (one error suffices); the subtraction form
+			// cannot overflow, unlike summing the two counts.
+			if c.Networks[i].UplinkVFsCount > 0 &&
+				c.Networks[i].MgmtPortVFsCount <= availableMgmtPortVFs &&
+				c.Networks[i].UplinkVFsCount > availableMgmtPortVFs-c.Networks[i].MgmtPortVFsCount {
+				errors = append(errors, fmt.Sprintf("networks[%d] (%s): 'mgmt_port_vfs_count' + 'uplink_vfs_count' must be <= num_pairs-2 (%d) because %s is reserved for the gateway and at least one VF must remain for pods",
+					i, net.Name, availableMgmtPortVFs, dpusim.HostGatewayInterface))
+			}
 		} else {
 			if net.BridgeName == "" {
 				errors = append(errors, fmt.Sprintf("networks[%d] (%s): 'bridge_name' is required", i, net.Name))
@@ -139,8 +153,11 @@ func (c *Config) validateAndSetDefaults() error {
 			if net.NumPairs > 0 {
 				errors = append(errors, fmt.Sprintf("networks[%d] (%s): 'num_pairs' is not allowed for type %s", i, net.Name, net.Type))
 			}
-			if net.MgmtPortVFsCount > 0 {
+			if net.MgmtPortVFsCount != 0 {
 				errors = append(errors, fmt.Sprintf("networks[%d] (%s): 'mgmt_port_vfs_count' is not allowed for type %s", i, net.Name, net.Type))
+			}
+			if net.UplinkVFsCount != 0 {
+				errors = append(errors, fmt.Sprintf("networks[%d] (%s): 'uplink_vfs_count' is not allowed for type %s", i, net.Name, net.Type))
 			}
 			if net.GatewaySubnet != "" {
 				errors = append(errors, fmt.Sprintf("networks[%d] (%s): 'gateway_subnet' is not allowed for type %s", i, net.Name, net.Type))
@@ -942,6 +959,30 @@ func (c *Config) DPUHostManagementPortVFsCount() int {
 		return 1
 	}
 	return net.MgmtPortVFsCount
+}
+
+// DPUHostUplinkVFsCount returns how many simulated VFs are reserved for
+// Uplink gateway interfaces, right after the mgmt-port range.
+func (c *Config) DPUHostUplinkVFsCount() int {
+	net := c.GetHostToDpuNetwork()
+	if net == nil {
+		return 0
+	}
+	return net.UplinkVFsCount
+}
+
+// DPUHostUplinkInterfaces returns the host-side interface names reserved for
+// Uplink gateways (eth0-(mgmt+1) .. eth0-(mgmt+uplinks)), in index order.
+func (c *Config) DPUHostUplinkInterfaces() []string {
+	net := c.GetHostToDpuNetwork()
+	if net == nil || net.UplinkVFsCount <= 0 {
+		return nil
+	}
+	names := make([]string, 0, net.UplinkVFsCount)
+	for i := 1; i <= net.UplinkVFsCount; i++ {
+		names = append(names, dpusim.HostDataIf(net.MgmtPortVFsCount+i))
+	}
+	return names
 }
 
 // DPUHostGatewaySubnet returns the subnet used for simulated DPU gateway

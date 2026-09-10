@@ -271,8 +271,9 @@ func (m *CNIManager) writeFRRK8sRemoteEnv(dpuClusterName, remoteKubeconfigPath, 
 		return err
 	}
 	envPath := filepath.Join(dir, fmt.Sprintf("%s-frr-k8s.env", dpuClusterName))
-	env := fmt.Sprintf("FRR_K8S_REMOTE_KUBECONFIG=%q\nFRR_K8S_HOST_KUBECONFIG=%q\nFRR_K8S_REMOTE_NODE_MAP=%q\nDPU_SIM_GATEWAY_NETWORK=%q\nDPU_SIM_GATEWAY_SUBNET=%q\n",
-		remoteKubeconfigPath, hostKubeconfigPath, strings.Join(entries, ","), m.config.DPUKindGatewayNetworkName(), m.config.DPUHostGatewaySubnet())
+	env := fmt.Sprintf("FRR_K8S_REMOTE_KUBECONFIG=%q\nFRR_K8S_HOST_KUBECONFIG=%q\nFRR_K8S_REMOTE_NODE_MAP=%q\nDPU_SIM_GATEWAY_NETWORK=%q\nDPU_SIM_GATEWAY_SUBNET=%q\nDPU_SIM_UPLINK_HOST_INTERFACES=%q\n",
+		remoteKubeconfigPath, hostKubeconfigPath, strings.Join(entries, ","), m.config.DPUKindGatewayNetworkName(), m.config.DPUHostGatewaySubnet(),
+		strings.Join(m.config.DPUHostUplinkInterfaces(), ","))
 	if err := os.WriteFile(envPath, []byte(env), 0o644); err != nil {
 		return fmt.Errorf("failed to write FRR-K8S env file %s: %w", envPath, err)
 	}

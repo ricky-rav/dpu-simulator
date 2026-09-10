@@ -19,6 +19,8 @@ func TestBuildResourcePools(t *testing.T) {
 	tests := []struct {
 		name           string
 		mgmtCount      int
+		uplinkCount    int
+		numPairs       int
 		mgmtMatches    []string
 		mgmtNonMatches []string
 		podMatches     []string
@@ -41,6 +43,42 @@ func TestBuildResourcePools(t *testing.T) {
 			podNonMatches:  []string{dpusim.HostDataIf(0), dpusim.HostDataIf(1), dpusim.HostDataIf(2), dpusim.HostDataIf(3)},
 		},
 		{
+			name:           "eight mgmt VFs",
+			mgmtCount:      8,
+			mgmtMatches:    []string{dpusim.HostDataIf(1), dpusim.HostDataIf(4), dpusim.HostDataIf(8)},
+			mgmtNonMatches: []string{dpusim.HostDataIf(0), dpusim.HostDataIf(9)},
+			podMatches:     []string{dpusim.HostDataIf(9), dpusim.HostDataIf(127)},
+			podNonMatches:  []string{dpusim.HostDataIf(0), dpusim.HostDataIf(1), dpusim.HostDataIf(8)},
+		},
+		{
+			name:           "eight mgmt VFs and one reserved uplink VF",
+			mgmtCount:      8,
+			uplinkCount:    1,
+			mgmtMatches:    []string{dpusim.HostDataIf(1), dpusim.HostDataIf(8)},
+			mgmtNonMatches: []string{dpusim.HostDataIf(0), dpusim.HostDataIf(9)},
+			podMatches:     []string{dpusim.HostDataIf(10), dpusim.HostDataIf(127)},
+			podNonMatches:  []string{dpusim.HostDataIf(0), dpusim.HostDataIf(8), dpusim.HostDataIf(9)},
+		},
+		{
+			name:           "two mgmt VFs and two reserved uplink VFs",
+			mgmtCount:      2,
+			uplinkCount:    2,
+			mgmtMatches:    []string{dpusim.HostDataIf(1), dpusim.HostDataIf(2)},
+			mgmtNonMatches: []string{dpusim.HostDataIf(0), dpusim.HostDataIf(3), dpusim.HostDataIf(4)},
+			podMatches:     []string{dpusim.HostDataIf(5), dpusim.HostDataIf(64)},
+			podNonMatches:  []string{dpusim.HostDataIf(2), dpusim.HostDataIf(3), dpusim.HostDataIf(4)},
+		},
+		{
+			name:           "num_pairs bounds the pod pool",
+			mgmtCount:      8,
+			uplinkCount:    1,
+			numPairs:       128,
+			mgmtMatches:    []string{dpusim.HostDataIf(1), dpusim.HostDataIf(8)},
+			mgmtNonMatches: []string{dpusim.HostDataIf(0), dpusim.HostDataIf(9)},
+			podMatches:     []string{dpusim.HostDataIf(10), dpusim.HostDataIf(127)},
+			podNonMatches:  []string{dpusim.HostDataIf(9), dpusim.HostDataIf(128), dpusim.HostDataIf(200)},
+		},
+		{
 			name:           "single mgmt VF",
 			mgmtCount:      1,
 			mgmtMatches:    []string{dpusim.HostDataIf(1)},
@@ -53,7 +91,7 @@ func TestBuildResourcePools(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			pools, err := BuildResourcePools(tt.mgmtCount)
+			pools, err := BuildResourcePools(tt.mgmtCount, tt.uplinkCount, tt.numPairs)
 			require.NoError(t, err)
 			assert.Len(t, pools, 2)
 
@@ -67,7 +105,11 @@ func TestBuildResourcePools(t *testing.T) {
 			} else {
 				assert.Equal(t, fmt.Sprintf("%s..%s", dpusim.HostDataIf(1), dpusim.HostDataIf(tt.mgmtCount)), mgmtPool.MatcherDescription())
 			}
-			assert.Equal(t, fmt.Sprintf("%s..", dpusim.HostDataIf(tt.mgmtCount+1)), podPool.MatcherDescription())
+			if tt.numPairs > 0 {
+				assert.Equal(t, fmt.Sprintf("%s..%s", dpusim.HostDataIf(tt.mgmtCount+tt.uplinkCount+1), dpusim.HostDataIf(tt.numPairs-1)), podPool.MatcherDescription())
+			} else {
+				assert.Equal(t, fmt.Sprintf("%s..", dpusim.HostDataIf(tt.mgmtCount+tt.uplinkCount+1)), podPool.MatcherDescription())
+			}
 
 			for _, iface := range tt.mgmtMatches {
 				assert.True(t, mgmtPool.MatchesIface(iface), "mgmt should match %s", iface)
@@ -93,8 +135,8 @@ func TestGatewayInterfaceExcludedFromPools(t *testing.T) {
 	t.Parallel()
 
 	gateway := dpusim.HostGatewayInterface
-	for _, mgmtCount := range []int{1, 2, 3, config.DefaultMgmtPortVFsCount} {
-		pools, err := BuildResourcePools(mgmtCount)
+	for _, mgmtCount := range []int{1, 2, 3, 8, config.DefaultMgmtPortVFsCount} {
+		pools, err := BuildResourcePools(mgmtCount, 1, 0)
 		require.NoError(t, err)
 		for _, pool := range pools {
 			assert.False(t, pool.MatchesIface(gateway), "pool %s must not match %s", pool.ResourceName, gateway)
@@ -105,9 +147,59 @@ func TestGatewayInterfaceExcludedFromPools(t *testing.T) {
 func TestBuildResourcePoolsInvalidCountErrors(t *testing.T) {
 	t.Parallel()
 
-	_, err := BuildResourcePools(0)
+	_, err := BuildResourcePools(0, 0, 0)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "mgmt_port_vfs_count")
+
+	_, err = BuildResourcePools(1, -1, 0)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "uplink_vfs_count")
+
+	_, err = BuildResourcePools(2, 1, 4)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no pod VF")
+}
+
+// TestUplinkVFsCountFromEnv checks parsing of UPLINK_VFS_COUNT: unset means
+// zero (manifests predating the reservation), negatives and garbage error.
+func TestUplinkVFsCountFromEnv(t *testing.T) {
+	t.Setenv(UplinkVFsCountEnvVar, "")
+	count, err := UplinkVFsCountFromEnv()
+	require.NoError(t, err)
+	assert.Equal(t, 0, count)
+
+	t.Setenv(UplinkVFsCountEnvVar, "2")
+	count, err = UplinkVFsCountFromEnv()
+	require.NoError(t, err)
+	assert.Equal(t, 2, count)
+
+	t.Setenv(UplinkVFsCountEnvVar, "-1")
+	_, err = UplinkVFsCountFromEnv()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), UplinkVFsCountEnvVar)
+
+	t.Setenv(UplinkVFsCountEnvVar, "invalid")
+	_, err = UplinkVFsCountFromEnv()
+	require.Error(t, err)
+}
+
+// TestPoolsExcludeConfigReservedUplinks cross-checks the two encodings of
+// the VF layout: no pool may match an interface name that pkg/config
+// reports as reserved for uplinks.
+func TestPoolsExcludeConfigReservedUplinks(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.Config{Networks: []config.NetworkConfig{
+		{Name: "host-to-dpu", Type: config.HostToDpuNetworkType, NumPairs: 128, MgmtPortVFsCount: 8, UplinkVFsCount: 2},
+	}}
+
+	pools, err := BuildResourcePools(cfg.DPUHostManagementPortVFsCount(), cfg.DPUHostUplinkVFsCount(), cfg.GetHostToDpuNumPairs())
+	require.NoError(t, err)
+	for _, name := range cfg.DPUHostUplinkInterfaces() {
+		for _, pool := range pools {
+			assert.False(t, pool.MatchesIface(name), "pool %s must not match reserved %s", pool.ResourceName, name)
+		}
+	}
 }
 
 // TestMgmtPortVFsCountFromEnv checks parsing of MGMT_PORT_VFS_COUNT.
